@@ -1,0 +1,13 @@
+using SSHClient.Forms;
+
+namespace SSHClient;
+
+static class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        ApplicationConfiguration.Initialize();
+        Application.Run(new MainForm());
+    }
+}
