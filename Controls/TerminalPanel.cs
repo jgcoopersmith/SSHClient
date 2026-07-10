@@ -1,9 +1,9 @@
 using System;
 using System.Drawing;
 using System.Text;
-using System.Threading;
 using System.Windows.Forms;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using SSHClient.Models;
 
 namespace SSHClient.Controls
@@ -15,8 +15,6 @@ namespace SSHClient.Controls
         private readonly Button _btnSend;
         private SshClient? _client;
         private ShellStream? _shell;
-        private Thread? _readThread;
-        private volatile bool _running;
 
         public ConnectionProfile Profile { get; }
 
@@ -45,12 +43,7 @@ namespace SSHClient.Controls
             };
             _input.KeyDown += Input_KeyDown;
 
-            _btnSend = new Button
-            {
-                Text = "Send",
-                Width = 60,
-                Dock = DockStyle.Right
-            };
+            _btnSend = new Button { Text = "Send", Width = 60, Dock = DockStyle.Right };
             _btnSend.Click += (_, _) => SendCommand();
 
             var inputBar = new Panel { Dock = DockStyle.Bottom, Height = 28 };
@@ -58,7 +51,6 @@ namespace SSHClient.Controls
 
             Controls.Add(_output);
             Controls.Add(inputBar);
-
             Dock = DockStyle.Fill;
         }
 
@@ -75,10 +67,9 @@ namespace SSHClient.Controls
                 _client = new SshClient(connInfo);
                 _client.Connect();
 
-                _shell = _client.CreateShellStream("xterm", 200, 50, 0, 0, 4096);
-                _running = true;
-                _readThread = new Thread(ReadLoop) { IsBackground = true };
-                _readThread.Start();
+                _shell = _client.CreateShellStream("xterm", 220, 50, 0, 0, 8192);
+                _shell.DataReceived += Shell_DataReceived;
+                _shell.ErrorOccurred += Shell_ErrorOccurred;
 
                 AppendOutput($"[Connected to {Profile.Host}:{Profile.Port}]\r\n", Color.Cyan);
             }
@@ -88,30 +79,16 @@ namespace SSHClient.Controls
             }
         }
 
-        private void ReadLoop()
+        private void Shell_DataReceived(object? sender, ShellDataEventArgs e)
         {
-            var buffer = new byte[4096];
-            while (_running && _shell != null)
-            {
-                try
-                {
-                    int read = _shell.Read(buffer, 0, buffer.Length);
-                    if (read > 0)
-                    {
-                        var text = Encoding.UTF8.GetString(buffer, 0, read);
-                        AppendOutput(text, Color.LightGreen);
-                    }
-                    else
-                    {
-                        Thread.Sleep(10);
-                    }
-                }
-                catch
-                {
-                    break;
-                }
-            }
-            AppendOutput("\r\n[Session ended]\r\n", Color.Cyan);
+            // Fires on a background SSH.NET thread — strip ANSI escapes before appending
+            var text = StripAnsi(Encoding.UTF8.GetString(e.Data));
+            AppendOutput(text, Color.LightGreen);
+        }
+
+        private void Shell_ErrorOccurred(object? sender, ExceptionEventArgs e)
+        {
+            AppendOutput($"\r\n[Error: {e.Exception.Message}]\r\n", Color.Red);
         }
 
         private void SendCommand()
@@ -119,7 +96,9 @@ namespace SSHClient.Controls
             if (_shell == null || _input.Text.Length == 0) return;
             var text = _input.Text;
             _input.Clear();
-            _shell.Write(text + "\n");
+            var bytes = Encoding.UTF8.GetBytes(text + "\n");
+            _shell.Write(bytes, 0, bytes.Length);
+            _shell.Flush();
         }
 
         private void Input_KeyDown(object? sender, KeyEventArgs e)
@@ -133,11 +112,7 @@ namespace SSHClient.Controls
 
         private void AppendOutput(string text, Color color)
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(() => AppendOutput(text, color));
-                return;
-            }
+            if (InvokeRequired) { BeginInvoke(() => AppendOutput(text, color)); return; }
             _output.SelectionStart = _output.TextLength;
             _output.SelectionLength = 0;
             _output.SelectionColor = color;
@@ -145,12 +120,47 @@ namespace SSHClient.Controls
             _output.ScrollToCaret();
         }
 
+        // Remove ANSI/VT100 escape sequences so the RichTextBox doesn't get garbled
+        private static string StripAnsi(string input)
+        {
+            var sb = new System.Text.StringBuilder(input.Length);
+            int i = 0;
+            while (i < input.Length)
+            {
+                if (input[i] == '\x1B' && i + 1 < input.Length && input[i + 1] == '[')
+                {
+                    // Skip ESC [ ... <letter>
+                    i += 2;
+                    while (i < input.Length && !(input[i] >= 'A' && input[i] <= 'Z') && !(input[i] >= 'a' && input[i] <= 'z'))
+                        i++;
+                    i++; // skip terminating letter
+                }
+                else if (input[i] == '\x1B' && i + 1 < input.Length)
+                {
+                    // Other escape sequences (e.g. ESC c, ESC =)
+                    i += 2;
+                }
+                else
+                {
+                    sb.Append(input[i]);
+                    i++;
+                }
+            }
+            return sb.ToString();
+        }
+
         public void Disconnect()
         {
-            _running = false;
-            _shell?.Dispose();
+            if (_shell != null)
+            {
+                _shell.DataReceived -= Shell_DataReceived;
+                _shell.ErrorOccurred -= Shell_ErrorOccurred;
+                _shell.Dispose();
+                _shell = null;
+            }
             _client?.Disconnect();
             _client?.Dispose();
+            _client = null;
         }
 
         protected override void Dispose(bool disposing)
