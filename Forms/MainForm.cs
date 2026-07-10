@@ -19,8 +19,9 @@ namespace SSHClient.Forms
         // Chat
         private readonly ChatServer _chatServer;
         private readonly Label _lblListenPort;
-        private readonly Button _btnChatConnect;
-        private int _chatTabCounter = 0;
+        private readonly ListBox _peerList;
+        private readonly Button _btnPeerNew, _btnPeerEdit, _btnPeerDelete, _btnPeerConnect;
+        private List<PeerProfile> _peers;
 
         public MainForm()
         {
@@ -30,11 +31,21 @@ namespace SSHClient.Forms
             StartPosition = FormStartPosition.CenterScreen;
 
             _profiles = ConnectionManager.Load();
+            _peers = PeerManager.Load();
 
             // ── Left panel ────────────────────────────────────────────
-            var leftPanel = new Panel { Width = 230, Dock = DockStyle.Left, Padding = new Padding(4) };
+            var leftSplit = new SplitContainer
+            {
+                Dock = DockStyle.Left,
+                Width = 230,
+                Orientation = Orientation.Horizontal,
+                SplitterDistance = 320,
+                Panel2MinSize = 160,
+                FixedPanel = FixedPanel.None,
+                BorderStyle = BorderStyle.None
+            };
 
-            // SSH section
+            // ── Top half: SSH connections ──
             var lblSsh = new Label
             {
                 Text = "SSH Connections",
@@ -61,14 +72,17 @@ namespace SSHClient.Forms
             var sshBtnBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, AutoSize = false };
             sshBtnBar.Controls.AddRange(new Control[] { _btnNew, _btnEdit, _btnDelete, _btnConnect, _btnSftp });
 
-            // Chat section (pinned at bottom of left panel)
-            var chatSection = new Panel { Dock = DockStyle.Bottom, Height = 72, Padding = new Padding(0, 4, 0, 0) };
+            leftSplit.Panel1.Padding = new Padding(4);
+            leftSplit.Panel1.Controls.Add(_profileList);
+            leftSplit.Panel1.Controls.Add(lblSsh);
+            leftSplit.Panel1.Controls.Add(sshBtnBar);
 
+            // ── Bottom half: Peer chat connections ──
             var lblChat = new Label
             {
-                Text = "Chat",
+                Text = "Chat Peers",
                 Dock = DockStyle.Top,
-                Height = 20,
+                Height = 22,
                 Font = new Font(Font, FontStyle.Bold)
             };
 
@@ -76,22 +90,32 @@ namespace SSHClient.Forms
             {
                 Text = "Starting...",
                 Dock = DockStyle.Top,
-                Height = 18,
+                Height = 16,
                 ForeColor = Color.Gray,
                 Font = new Font(Font.FontFamily, 8f)
             };
 
-            _btnChatConnect = new Button { Text = "Connect to Peer", Dock = DockStyle.Bottom, Height = 26 };
-            _btnChatConnect.Click += (_, _) => ConnectToPeer();
+            _peerList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+            _peerList.DoubleClick += (_, _) => ConnectToPeer();
 
-            chatSection.Controls.Add(_btnChatConnect);
-            chatSection.Controls.Add(_lblListenPort);
-            chatSection.Controls.Add(lblChat);
+            _btnPeerNew = new Button { Text = "+", Width = 30 };
+            _btnPeerEdit = new Button { Text = "✎", Width = 30 };
+            _btnPeerDelete = new Button { Text = "✕", Width = 30 };
+            _btnPeerConnect = new Button { Text = "Chat", Width = 50 };
 
-            leftPanel.Controls.Add(_profileList);
-            leftPanel.Controls.Add(lblSsh);
-            leftPanel.Controls.Add(sshBtnBar);
-            leftPanel.Controls.Add(chatSection);
+            _btnPeerNew.Click += (_, _) => NewPeer();
+            _btnPeerEdit.Click += (_, _) => EditPeer();
+            _btnPeerDelete.Click += (_, _) => DeletePeer();
+            _btnPeerConnect.Click += (_, _) => ConnectToPeer();
+
+            var peerBtnBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, AutoSize = false };
+            peerBtnBar.Controls.AddRange(new Control[] { _btnPeerNew, _btnPeerEdit, _btnPeerDelete, _btnPeerConnect });
+
+            leftSplit.Panel2.Padding = new Padding(4);
+            leftSplit.Panel2.Controls.Add(_peerList);
+            leftSplit.Panel2.Controls.Add(_lblListenPort);
+            leftSplit.Panel2.Controls.Add(lblChat);
+            leftSplit.Panel2.Controls.Add(peerBtnBar);
 
             // ── Tabs ──────────────────────────────────────────────────
             _tabs = new TabControl { Dock = DockStyle.Fill };
@@ -101,9 +125,10 @@ namespace SSHClient.Forms
 
             Controls.Add(_tabs);
             Controls.Add(splitter);
-            Controls.Add(leftPanel);
+            Controls.Add(leftSplit);
 
             RefreshProfileList();
+            RefreshPeerList();
 
             // Start chat server
             _chatServer = new ChatServer(Environment.UserName);
@@ -116,19 +141,29 @@ namespace SSHClient.Forms
 
         private void ChatServer_PeerConnected(object? sender, ChatPeerEventArgs e)
         {
-            // Incoming connection from a peer — open a chat tab on the UI thread
             BeginInvoke(() => OpenChatTab(e.PeerId, e.DisplayName));
         }
 
         private void ConnectToPeer()
         {
-            using var dlg = new ChatConnectDialog();
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            var peer = SelectedPeer;
+            if (peer == null)
+            {
+                // Quick-connect without saving
+                using var dlg = new PeerDialog();
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                DoConnect(dlg.Result.Host, dlg.Result.Port);
+                return;
+            }
+            DoConnect(peer.Host, peer.Port);
+        }
+
+        private void DoConnect(string host, int port)
+        {
             try
             {
-                var peer = _chatServer.ConnectTo(dlg.Host, dlg.Port);
-                // The HELLO handshake runs async; PeerConnected will fire and open the tab.
-                // Wait briefly so the tab is ready; if the event fires before we return, fine.
+                _chatServer.ConnectTo(host, port);
+                // PeerConnected fires async and opens the tab
             }
             catch (Exception ex)
             {
@@ -138,7 +173,6 @@ namespace SSHClient.Forms
 
         private void OpenChatTab(string peerId, string displayName)
         {
-            // Avoid duplicate tabs for the same peer
             foreach (TabPage existing in _tabs.TabPages)
             {
                 if (existing.Tag is ChatPanel cp && cp.PeerId == peerId)
@@ -155,7 +189,48 @@ namespace SSHClient.Forms
             tab.Controls.Add(panel);
             _tabs.TabPages.Add(tab);
             _tabs.SelectedTab = tab;
-            _chatTabCounter++;
+        }
+
+        // ── Peer CRUD ─────────────────────────────────────────────────
+
+        private void RefreshPeerList()
+        {
+            _peerList.Items.Clear();
+            foreach (var p in _peers)
+                _peerList.Items.Add(p);
+        }
+
+        private PeerProfile? SelectedPeer => _peerList.SelectedItem as PeerProfile;
+
+        private void NewPeer()
+        {
+            using var dlg = new PeerDialog();
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            _peers.Add(dlg.Result);
+            PeerManager.Save(_peers);
+            RefreshPeerList();
+            _peerList.SelectedItem = dlg.Result;
+        }
+
+        private void EditPeer()
+        {
+            if (SelectedPeer == null) return;
+            using var dlg = new PeerDialog(SelectedPeer);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            var idx = _peers.IndexOf(SelectedPeer);
+            _peers[idx] = dlg.Result;
+            PeerManager.Save(_peers);
+            RefreshPeerList();
+        }
+
+        private void DeletePeer()
+        {
+            if (SelectedPeer == null) return;
+            if (MessageBox.Show($"Delete '{SelectedPeer}'?", "Confirm",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            _peers.Remove(SelectedPeer);
+            PeerManager.Save(_peers);
+            RefreshPeerList();
         }
 
         // ── Tabs ──────────────────────────────────────────────────────
