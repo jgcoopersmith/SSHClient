@@ -15,6 +15,7 @@ namespace SSHClient.Controls
         private readonly Button _btnSend;
         private SshClient? _client;
         private ShellStream? _shell;
+        private bool _autoScroll = true;
 
         public ConnectionProfile Profile { get; }
 
@@ -42,6 +43,7 @@ namespace SSHClient.Controls
                 BorderStyle = BorderStyle.FixedSingle
             };
             _input.KeyDown += Input_KeyDown;
+            _output.VScroll += Output_VScroll;
 
             _btnSend = new Button { Text = "Send", Width = 60, Dock = DockStyle.Right };
             _btnSend.Click += (_, _) => SendCommand();
@@ -110,6 +112,15 @@ namespace SSHClient.Controls
             }
         }
 
+        private void Output_VScroll(object? sender, EventArgs e)
+        {
+            // Detect whether the user is at the bottom; update auto-scroll accordingly.
+            // GetPositionFromCharIndex returns the pixel position of the last character.
+            // If it falls within the visible client area we're at (or near) the bottom.
+            var lastPos = _output.GetPositionFromCharIndex(Math.Max(0, _output.TextLength - 1));
+            _autoScroll = lastPos.Y <= _output.ClientSize.Height;
+        }
+
         private void AppendOutput(string text, Color color)
         {
             if (InvokeRequired) { BeginInvoke(() => AppendOutput(text, color)); return; }
@@ -117,7 +128,8 @@ namespace SSHClient.Controls
             _output.SelectionLength = 0;
             _output.SelectionColor = color;
             _output.AppendText(text);
-            _output.ScrollToCaret();
+            if (_autoScroll)
+                _output.ScrollToCaret();
         }
 
         // Remove ANSI/VT100 escape sequences so the RichTextBox doesn't get garbled
