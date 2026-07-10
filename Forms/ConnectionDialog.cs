@@ -16,22 +16,32 @@ namespace SSHClient.Forms
         public ConnectionDialog(ConnectionProfile? existing = null)
         {
             Text = existing == null ? "New Connection" : "Edit Connection";
-            Size = new Size(420, 360);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = MinimizeBox = false;
+            Size = new Size(440, 380);
+            MinimumSize = new Size(320, 260);
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = false;
+            MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
+
+            // Scrollable container so the form can be resized small without clipping fields
+            var scroll = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true
+            };
+            Controls.Add(scroll);
 
             var layout = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
                 Padding = new Padding(12),
                 ColumnCount = 2,
                 RowCount = 9,
-                AutoSize = true
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Controls.Add(layout);
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
+            scroll.Controls.Add(layout);
 
             txtName = AddRow(layout, 0, "Name:");
             txtHost = AddRow(layout, 1, "Host:");
