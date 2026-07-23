@@ -24,8 +24,8 @@ namespace SSHClient.Forms
         private readonly Button _btnPeerNew, _btnPeerEdit, _btnPeerDelete, _btnPeerConnect;
         private List<PeerProfile> _peers;
 
-        // Version shown in the window title, read from the assembly so it always
-        // matches the build (InformationalVersion, minus any +git-hash suffix).
+        // App version shown on the "SSH Connections" header, read from the assembly
+        // so it always matches the build (InformationalVersion, minus any +git-hash suffix).
         private static string AppVersion
         {
             get
@@ -39,7 +39,7 @@ namespace SSHClient.Forms
 
         public MainForm()
         {
-            Text = $"SSH Connections {AppVersion}";
+            Text = "SSH Client";
             Size = new Size(1060, 700);
             MinimumSize = new Size(700, 480);
             StartPosition = FormStartPosition.CenterScreen;
@@ -62,7 +62,7 @@ namespace SSHClient.Forms
             // ── Top half: SSH connections ──
             var lblSsh = new Label
             {
-                Text = "SSH Connections",
+                Text = $"SSH Connections {AppVersion}",
                 Dock = DockStyle.Top,
                 Height = 22,
                 Font = new Font(Font, FontStyle.Bold)
@@ -137,7 +137,11 @@ namespace SSHClient.Forms
             // When switching tabs, put the caret on that panel's entry bar.
             _tabs.SelectedIndexChanged += (_, _) =>
             {
-                if (_tabs.SelectedTab?.Tag is TerminalPanel tp) tp.FocusInput();
+                switch (_tabs.SelectedTab?.Tag)
+                {
+                    case TerminalPanel tp: tp.FocusInput(); break;
+                    case ChatPanel cp: cp.FocusInput(); break;
+                }
             };
 
             var splitter = new Splitter { Dock = DockStyle.Left, Width = 4 };
@@ -197,6 +201,7 @@ namespace SSHClient.Forms
                 if (existing.Tag is ChatPanel cp && cp.PeerId == peerId)
                 {
                     _tabs.SelectedTab = existing;
+                    cp.FocusInput();
                     return;
                 }
             }
@@ -208,6 +213,7 @@ namespace SSHClient.Forms
             tab.Controls.Add(panel);
             _tabs.TabPages.Add(tab);
             _tabs.SelectedTab = tab;
+            panel.FocusInput(); // land the caret on the message box, ready to type
         }
 
         // ── Peer CRUD ─────────────────────────────────────────────────

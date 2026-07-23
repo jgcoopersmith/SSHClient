@@ -1,0 +1,23 @@
+#!/bin/sh
+# Auto-bump the patch version in SSHClient.csproj on every commit, then re-stage it,
+# so the "SSH Connections <version>" header always reflects a fresh build number.
+set -e
+
+CSPROJ="SSHClient.csproj"
+[ -f "$CSPROJ" ] || exit 0
+
+current=$(grep -oE '<Version>[0-9]+\.[0-9]+\.[0-9]+</Version>' "$CSPROJ" | head -1 \
+          | sed -E 's/<\/?Version>//g')
+[ -n "$current" ] || exit 0
+
+major=$(echo "$current" | cut -d. -f1)
+minor=$(echo "$current" | cut -d. -f2)
+patch=$(echo "$current" | cut -d. -f3)
+next="$major.$minor.$((patch + 1))"
+
+# Replace the version in place and re-stage the file.
+sed -i -E "s#<Version>$major\.$minor\.$patch</Version>#<Version>$next</Version>#" "$CSPROJ"
+git add "$CSPROJ"
+
+echo "pre-commit: bumped version $current -> $next"
+exit 0

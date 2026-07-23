@@ -102,6 +102,20 @@ namespace SSHClient.Controls
             }
         }
 
+        /// <summary>Put keyboard focus on the message box so the user can type immediately.</summary>
+        public void FocusInput()
+        {
+            if (!IsHandleCreated) { HandleCreated += (_, _) => BeginInvoke(FocusInput); return; }
+            BeginInvoke(() => _input.Focus());
+        }
+
+        // When this tab/panel gains focus, redirect it to the message box.
+        protected override void OnEnter(EventArgs e)
+        {
+            base.OnEnter(e);
+            FocusInput();
+        }
+
         private void AppendMessage(string sender, string text, Color nameColor)
         {
             if (InvokeRequired) { BeginInvoke(() => AppendMessage(sender, text, nameColor)); return; }
