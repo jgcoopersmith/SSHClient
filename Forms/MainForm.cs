@@ -134,6 +134,11 @@ namespace SSHClient.Forms
             // ── Tabs ──────────────────────────────────────────────────
             _tabs = new TabControl { Dock = DockStyle.Fill };
             _tabs.MouseClick += Tabs_MouseClick;
+            // When switching tabs, put the caret on that panel's entry bar.
+            _tabs.SelectedIndexChanged += (_, _) =>
+            {
+                if (_tabs.SelectedTab?.Tag is TerminalPanel tp) tp.FocusInput();
+            };
 
             var splitter = new Splitter { Dock = DockStyle.Left, Width = 4 };
 
@@ -329,6 +334,7 @@ namespace SSHClient.Forms
             _tabs.TabPages.Add(tab);
             _tabs.SelectedTab = tab;
             terminal.Connect();
+            terminal.FocusInput(); // land the caret on the entry bar, ready to type
         }
 
         private void OpenSftp()

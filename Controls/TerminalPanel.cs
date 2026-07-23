@@ -108,6 +108,22 @@ namespace SSHClient.Controls
             var bytes = Encoding.UTF8.GetBytes(text + "\n");
             _shell.Write(bytes, 0, bytes.Length);
             _shell.Flush();
+            _input.Focus(); // keep focus on the entry bar (esp. after clicking Send)
+        }
+
+        /// <summary>Put keyboard focus on the command line so the user can type immediately.</summary>
+        public void FocusInput()
+        {
+            if (!IsHandleCreated) { HandleCreated += (_, _) => BeginInvoke(FocusInput); return; }
+            BeginInvoke(() => _input.Focus());
+        }
+
+        // When this tab/panel gains focus, redirect it to the command line rather than
+        // letting the container or output box take it.
+        protected override void OnEnter(EventArgs e)
+        {
+            base.OnEnter(e);
+            FocusInput();
         }
 
         private void Input_KeyDown(object? sender, KeyEventArgs e)
