@@ -39,6 +39,9 @@ namespace SSHClient.Controls
             };
             _input.KeyDown += Input_KeyDown;
 
+            EditContextMenu.Attach(_log);   // copy / select-all on the read-only chat log
+            EditContextMenu.Attach(_input); // cut / copy / paste on the message box
+
             _btnSend = new Button { Text = "Send", Width = 60, Dock = DockStyle.Right };
             _btnSend.Click += (_, _) => SendMessage();
 

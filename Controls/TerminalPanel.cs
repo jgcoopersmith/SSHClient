@@ -16,6 +16,7 @@ namespace SSHClient.Controls
         private SshClient? _client;
         private ShellStream? _shell;
         private bool _autoScroll = true;
+        private string _pendingEscape = "";
 
         public ConnectionProfile Profile { get; }
 
@@ -44,6 +45,9 @@ namespace SSHClient.Controls
             };
             _input.KeyDown += Input_KeyDown;
             _output.VScroll += Output_VScroll;
+
+            EditContextMenu.Attach(_output); // copy / select-all on the read-only terminal
+            EditContextMenu.Attach(_input);  // cut / copy / paste on the command line
 
             _btnSend = new Button { Text = "Send", Width = 60, Dock = DockStyle.Right };
             _btnSend.Click += (_, _) => SendCommand();
@@ -83,9 +87,12 @@ namespace SSHClient.Controls
 
         private void Shell_DataReceived(object? sender, ShellDataEventArgs e)
         {
-            // Fires on a background SSH.NET thread — strip ANSI escapes before appending
-            var text = StripAnsi(Encoding.UTF8.GetString(e.Data));
-            AppendOutput(text, Color.LightGreen);
+            // Fires on a background SSH.NET thread — strip ANSI escapes before appending.
+            // A single escape sequence can be split across two DataReceived events, so any
+            // incomplete trailing sequence is carried over in _pendingEscape and re-prepended.
+            var text = StripAnsi(_pendingEscape + Encoding.UTF8.GetString(e.Data), out _pendingEscape);
+            if (text.Length > 0)
+                AppendOutput(text, Color.LightGreen);
         }
 
         private void Shell_ErrorOccurred(object? sender, ExceptionEventArgs e)
@@ -124,38 +131,84 @@ namespace SSHClient.Controls
         private void AppendOutput(string text, Color color)
         {
             if (InvokeRequired) { BeginInvoke(() => AppendOutput(text, color)); return; }
+
+            // Preserve any selection the user is making so incoming shell data doesn't
+            // wipe it out before they can Copy. Appending happens at the end of the buffer,
+            // which is past the selection, so the saved offsets stay valid afterward.
+            int selStart = _output.SelectionStart;
+            int selLength = _output.SelectionLength;
+            bool userHasSelection = selLength > 0;
+
             _output.SelectionStart = _output.TextLength;
             _output.SelectionLength = 0;
             _output.SelectionColor = color;
             _output.AppendText(text);
-            if (_autoScroll)
+
+            if (userHasSelection)
+            {
+                // Restore the user's selection; don't scroll away while they're selecting.
+                _output.SelectionStart = selStart;
+                _output.SelectionLength = selLength;
+            }
+            else if (_autoScroll)
+            {
                 _output.ScrollToCaret();
+            }
         }
 
-        // Remove ANSI/VT100 escape sequences so the RichTextBox doesn't get garbled
-        private static string StripAnsi(string input)
+        // Remove ANSI/VT100 escape sequences so the RichTextBox doesn't get garbled.
+        // Any incomplete sequence at the tail (split across SSH data chunks) is returned
+        // via 'pending' so it can be prepended to the next chunk instead of leaking.
+        private static string StripAnsi(string input, out string pending)
         {
+            pending = "";
             var sb = new System.Text.StringBuilder(input.Length);
             int i = 0;
             while (i < input.Length)
             {
-                if (input[i] == '\x1B' && i + 1 < input.Length && input[i + 1] == '[')
-                {
-                    // Skip ESC [ ... <letter>
-                    i += 2;
-                    while (i < input.Length && !(input[i] >= 'A' && input[i] <= 'Z') && !(input[i] >= 'a' && input[i] <= 'z'))
-                        i++;
-                    i++; // skip terminating letter
-                }
-                else if (input[i] == '\x1B' && i + 1 < input.Length)
-                {
-                    // Other escape sequences (e.g. ESC c, ESC =)
-                    i += 2;
-                }
-                else
+                if (input[i] != '\x1B')
                 {
                     sb.Append(input[i]);
                     i++;
+                    continue;
+                }
+
+                // We're at an ESC. If it's the only byte, the sequence is incomplete.
+                if (i + 1 >= input.Length)
+                {
+                    pending = input.Substring(i);
+                    break;
+                }
+
+                char next = input[i + 1];
+                if (next == '[')
+                {
+                    // CSI: ESC [ ... <final byte 0x40-0x7E>
+                    int j = i + 2;
+                    while (j < input.Length && !(input[j] >= '\x40' && input[j] <= '\x7E'))
+                        j++;
+                    if (j >= input.Length) { pending = input.Substring(i); break; } // no final byte yet
+                    i = j + 1; // skip through final byte
+                }
+                else if (next == ']')
+                {
+                    // OSC: ESC ] ... terminated by BEL (0x07) or ST (ESC \)
+                    int j = i + 2;
+                    while (j < input.Length && input[j] != '\x07' &&
+                           !(input[j] == '\x1B' && j + 1 < input.Length && input[j + 1] == '\\'))
+                        j++;
+                    if (j >= input.Length) { pending = input.Substring(i); break; } // terminator not seen yet
+                    if (input[j] == '\x1B')
+                    {
+                        if (j + 1 >= input.Length) { pending = input.Substring(i); break; } // ESC of ST split off
+                        j++; // consume ESC of the ST pair
+                    }
+                    i = j + 1; // consume BEL, or the backslash of ST
+                }
+                else
+                {
+                    // Other two-byte escape (e.g. ESC c, ESC =)
+                    i += 2;
                 }
             }
             return sb.ToString();
