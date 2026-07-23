@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Reflection;
 using System.Windows.Forms;
 using SSHClient.Controls;
 using SSHClient.Models;
@@ -23,9 +24,22 @@ namespace SSHClient.Forms
         private readonly Button _btnPeerNew, _btnPeerEdit, _btnPeerDelete, _btnPeerConnect;
         private List<PeerProfile> _peers;
 
+        // Version shown in the window title, read from the assembly so it always
+        // matches the build (InformationalVersion, minus any +git-hash suffix).
+        private static string AppVersion
+        {
+            get
+            {
+                var asm = Assembly.GetExecutingAssembly();
+                var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+                var raw = info ?? asm.GetName().Version?.ToString() ?? "1.0.0";
+                return raw.Split('+')[0];
+            }
+        }
+
         public MainForm()
         {
-            Text = "SSH Client";
+            Text = $"SSH Connections {AppVersion}";
             Size = new Size(1060, 700);
             MinimumSize = new Size(700, 480);
             StartPosition = FormStartPosition.CenterScreen;
