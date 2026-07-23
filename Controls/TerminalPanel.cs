@@ -25,6 +25,13 @@ namespace SSHClient.Controls
         private int _curCol;    // cursor column within _curLine
         private int _lineStart; // index in _output where the current line begins
 
+        // Command history for Up/Down recall on the entry line. _historyIndex points at the
+        // currently recalled entry, or _history.Count when composing a fresh line; _draft
+        // holds that in-progress line so it comes back when arrowing past the newest entry.
+        private readonly List<string> _history = new List<string>();
+        private int _historyIndex;
+        private string _draft = "";
+
         private static readonly System.Text.RegularExpressions.Regex _passwordPrompt =
             new System.Text.RegularExpressions.Regex(
                 @"(?:password(?: for [^:]*)?|passphrase(?: for [^:]*)?|verification code)\s*:\s*$",
@@ -120,10 +127,40 @@ namespace SSHClient.Controls
             // just like pressing Enter in a real terminal.
             var text = _input.Text;
             _input.Clear();
+
+            // Record non-empty commands for Up/Down recall, skipping consecutive duplicates.
+            if (text.Length > 0 && (_history.Count == 0 || _history[^1] != text))
+                _history.Add(text);
+            _historyIndex = _history.Count; // back to "composing a fresh line"
+            _draft = "";
+
             var bytes = Encoding.UTF8.GetBytes(text + "\n");
             _shell.Write(bytes, 0, bytes.Length);
             _shell.Flush();
             _input.Focus(); // keep focus on the entry bar (esp. after clicking Send)
+        }
+
+        // Replace the entry line with a recalled command and drop the caret at the end.
+        private void SetInput(string value)
+        {
+            _input.Text = value;
+            _input.SelectionStart = _input.Text.Length;
+            _input.SelectionLength = 0;
+        }
+
+        private void RecallPrevious()
+        {
+            if (_historyIndex == 0 || _history.Count == 0) return;
+            if (_historyIndex == _history.Count) _draft = _input.Text; // stash the fresh line
+            _historyIndex--;
+            SetInput(_history[_historyIndex]);
+        }
+
+        private void RecallNext()
+        {
+            if (_historyIndex >= _history.Count) return;
+            _historyIndex++;
+            SetInput(_historyIndex == _history.Count ? _draft : _history[_historyIndex]);
         }
 
         /// <summary>Put keyboard focus on the command line so the user can type immediately.</summary>
@@ -143,10 +180,20 @@ namespace SSHClient.Controls
 
         private void Input_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Enter)
+            switch (e.KeyCode)
             {
-                e.SuppressKeyPress = true;
-                SendCommand();
+                case Keys.Enter:
+                    e.SuppressKeyPress = true;
+                    SendCommand();
+                    break;
+                case Keys.Up:
+                    e.SuppressKeyPress = true; // also stops the caret from jumping
+                    RecallPrevious();
+                    break;
+                case Keys.Down:
+                    e.SuppressKeyPress = true;
+                    RecallNext();
+                    break;
             }
         }
 
