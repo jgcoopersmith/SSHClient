@@ -51,7 +51,9 @@ namespace SSHClient.Controls
                 ForeColor = Color.LightGreen,
                 Font = new Font("Consolas", 10f),
                 ReadOnly = true,
-                ScrollBars = RichTextBoxScrollBars.Vertical,
+                // Both scrollbars with word-wrap off: long lines get a horizontal
+                // scrollbar at the bottom instead of being clipped.
+                ScrollBars = RichTextBoxScrollBars.Both,
                 WordWrap = false
             };
 
