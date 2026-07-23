@@ -102,7 +102,9 @@ namespace SSHClient.Controls
 
         private void SendCommand()
         {
-            if (_shell == null || _input.Text.Length == 0) return;
+            if (_shell == null) return;
+            // An empty line still sends a bare newline so the shell echoes a fresh prompt,
+            // just like pressing Enter in a real terminal.
             var text = _input.Text;
             _input.Clear();
             var bytes = Encoding.UTF8.GetBytes(text + "\n");
