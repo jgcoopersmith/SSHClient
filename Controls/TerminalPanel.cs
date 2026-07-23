@@ -18,6 +18,19 @@ namespace SSHClient.Controls
         private bool _autoScroll = true;
         private string _pendingEscape = "";
 
+        // Minimal terminal line discipline: the current (not-yet-newlined) line is modeled
+        // here so C0 control characters — backspace, carriage return, tab — actually move
+        // the cursor instead of leaking into the RichTextBox as unresolved glyphs.
+        private readonly StringBuilder _curLine = new StringBuilder();
+        private int _curCol;    // cursor column within _curLine
+        private int _lineStart; // index in _output where the current line begins
+
+        private static readonly System.Text.RegularExpressions.Regex _passwordPrompt =
+            new System.Text.RegularExpressions.Regex(
+                @"(?:password(?: for [^:]*)?|passphrase(?: for [^:]*)?|verification code)\s*:\s*$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
         public ConnectionProfile Profile { get; }
 
         public TerminalPanel(ConnectionProfile profile)
@@ -77,11 +90,11 @@ namespace SSHClient.Controls
                 _shell.DataReceived += Shell_DataReceived;
                 _shell.ErrorOccurred += Shell_ErrorOccurred;
 
-                AppendOutput($"[Connected to {Profile.Host}:{Profile.Port}]\r\n", Color.Cyan);
+                AppendSystemLine($"[Connected to {Profile.Host}:{Profile.Port}]\r\n", Color.Cyan);
             }
             catch (Exception ex)
             {
-                AppendOutput($"[Connection failed: {ex.Message}]\r\n", Color.Red);
+                AppendSystemLine($"[Connection failed: {ex.Message}]\r\n", Color.Red);
             }
         }
 
@@ -92,12 +105,12 @@ namespace SSHClient.Controls
             // incomplete trailing sequence is carried over in _pendingEscape and re-prepended.
             var text = StripAnsi(_pendingEscape + Encoding.UTF8.GetString(e.Data), out _pendingEscape);
             if (text.Length > 0)
-                AppendOutput(text, Color.LightGreen);
+                AppendShellText(text);
         }
 
         private void Shell_ErrorOccurred(object? sender, ExceptionEventArgs e)
         {
-            AppendOutput($"\r\n[Error: {e.Exception.Message}]\r\n", Color.Red);
+            AppendSystemLine($"\r\n[Error: {e.Exception.Message}]\r\n", Color.Red);
         }
 
         private void SendCommand()
@@ -146,32 +159,95 @@ namespace SSHClient.Controls
             _autoScroll = lastPos.Y <= _output.ClientSize.Height;
         }
 
-        private void AppendOutput(string text, Color color)
+        // Feed shell output through a minimal terminal line discipline: printable text is
+        // written at the cursor column of the current line; backspace/CR/tab move the cursor;
+        // newline commits the line. This keeps raw control bytes (and things like sudo's
+        // password-feedback erase sequences) from showing up as unresolved glyphs.
+        private void AppendShellText(string text)
         {
-            if (InvokeRequired) { BeginInvoke(() => AppendOutput(text, color)); return; }
+            if (InvokeRequired) { BeginInvoke(() => AppendShellText(text)); return; }
 
-            // Preserve any selection the user is making so incoming shell data doesn't
-            // wipe it out before they can Copy. Appending happens at the end of the buffer,
-            // which is past the selection, so the saved offsets stay valid afterward.
+            var committed = new StringBuilder();
+            foreach (char ch in text)
+            {
+                switch (ch)
+                {
+                    case '\r': _curCol = 0; break;
+                    case '\b': if (_curCol > 0) _curCol--; break;
+                    case '\n':
+                        committed.Append(_curLine).Append('\n');
+                        _curLine.Clear();
+                        _curCol = 0;
+                        break;
+                    case '\t':
+                        int stop = ((_curCol / 8) + 1) * 8;
+                        while (_curCol < stop) WriteChar(' ');
+                        break;
+                    default:
+                        // Printable only; silently drop any remaining C0/DEL control bytes.
+                        if (ch >= ' ' && ch != '\x7F') WriteChar(ch);
+                        break;
+                }
+            }
+
+            RenderCurrentLine(committed.ToString());
+
+            // Detect password prompts on the resolved current line (backspaces already
+            // applied), so masking is accurate even with sudo's pwfeedback asterisks.
+            bool mask = _passwordPrompt.IsMatch(_curLine.ToString());
+            if (_input.UseSystemPasswordChar != mask)
+                _input.UseSystemPasswordChar = mask;
+        }
+
+        // Write one printable char at the cursor: overwrite in place if the cursor is inside
+        // the existing line (as with a CR-then-retype redraw), otherwise extend the line.
+        private void WriteChar(char ch)
+        {
+            if (_curCol < _curLine.Length) _curLine[_curCol] = ch;
+            else _curLine.Append(ch);
+            _curCol++;
+        }
+
+        // Replace the on-screen tail (everything from _lineStart) with the freshly committed
+        // lines plus the live current line, preserving any active selection / auto-scroll.
+        private void RenderCurrentLine(string committed)
+        {
             int selStart = _output.SelectionStart;
             int selLength = _output.SelectionLength;
-            bool userHasSelection = selLength > 0;
+            bool userHasSelection = selLength > 0 && selStart + selLength <= _lineStart;
 
-            _output.SelectionStart = _output.TextLength;
-            _output.SelectionLength = 0;
-            _output.SelectionColor = color;
-            _output.AppendText(text);
+            _output.Select(_lineStart, _output.TextLength - _lineStart);
+            _output.SelectionColor = Color.LightGreen;
+            _output.SelectedText = committed + _curLine.ToString();
+            _lineStart += committed.Length;
 
             if (userHasSelection)
             {
-                // Restore the user's selection; don't scroll away while they're selecting.
-                _output.SelectionStart = selStart;
-                _output.SelectionLength = selLength;
+                _output.Select(selStart, selLength);
             }
             else if (_autoScroll)
             {
+                _output.SelectionStart = _output.TextLength;
+                _output.SelectionLength = 0;
                 _output.ScrollToCaret();
             }
+        }
+
+        // Append client-generated status text (connect/error notices) as a clean line,
+        // freezing whatever partial shell line preceded it.
+        private void AppendSystemLine(string text, Color color)
+        {
+            if (InvokeRequired) { BeginInvoke(() => AppendSystemLine(text, color)); return; }
+
+            _output.Select(_output.TextLength, 0);
+            _output.SelectionColor = color;
+            _output.AppendText(text);
+
+            _curLine.Clear();
+            _curCol = 0;
+            _lineStart = _output.TextLength;
+
+            if (_autoScroll) _output.ScrollToCaret();
         }
 
         // Remove ANSI/VT100 escape sequences so the RichTextBox doesn't get garbled.
